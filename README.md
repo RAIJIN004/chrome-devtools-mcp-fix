@@ -1,40 +1,54 @@
-# Chrome DevTools MCP - File Upload Fix for Facebook Marketplace
+# 🔧 Facebook Marketplace "Loading..." Image Upload Fix
 
-## Problem Description
+## Chrome DevTools MCP - Fix para subida intermitente de imágenes
 
-The `upload_file` tool in the Chrome DevTools MCP package fails intermittently when uploading files to Facebook Marketplace and other similar sites that use hidden file inputs.
+> **Problema:** El comando `upload_file` falla intermitentemente en Facebook Marketplace. A veces funciona, a veces no, en la misma página. La imagen se queda en "Loading..." eterno.
 
-### Symptoms
+---
 
-- File upload appears to work but image never loads (stuck on "Loading...")
-- Works sometimes, fails other times on the same page
-- The file picker native dialog may open but upload fails
-- Happens more frequently with complex file paths (spaces, special characters, long paths)
+## 🐛 El Problema Detectado
 
-### Root Cause
+```
+❌ upload_file() en Facebook Marketplace → "Loading..." eterno
+❌ A veces funciona, a veces no (misma página, misma ruta)
+❌ Error: "The element could not accept the file directly"
+```
 
-The original `upload_file` handler in `chrome-devtools-mcp` uses two methods:
+**Diagnóstico:** Facebook usa botones que activan inputs file ocultos (`display: none`). Los 2 métodos originales del Chrome DevTools MCP no pueden subir correctamente a estos elementos ocultos.
 
-1. **Direct upload**: `handle.uploadFile(filePath)` - tries to upload directly to the element
-2. **File chooser**: Click element → wait for file chooser → accept file
+**NOTA:** NO es por rutas complejas. Probamos y todas funcionan:
+- ✅ Rutas simples: `C:\Users\user\Downloads\foto.jpg`
+- ✅ Con espacios: `C:\My Documents\foto.jpg`  
+- ✅ Con paréntesis: `C:\Downloads\COPIA (19-09-2025)\foto.png`
+- ✅ Con caracteres unicode: `C:\Downloads\TapScanner 13꞉22 (p1).jpg`
 
-Both methods fail on sites like Facebook Marketplace because:
-- The button that triggers upload is not a `<input type="file">` element
-- The actual file input is hidden (`display: none`)
-- The native file picker dialog doesn't always communicate properly with Puppeteer
+---
 
-## Solution
+## ✅ La Solución
 
-This patch adds a **third fallback method** that:
-1. Searches for hidden `<input type="file">` elements in the DOM
-2. Makes them temporarily visible
-3. Uses Chrome DevTools Protocol (CDP) to upload files directly to the input
+Este fix agrega un **TERCER MÉTODO FALLBACK** que usa Chrome DevTools Protocol (CDP):
 
-## Installation
+```
+Método 1 (original): handle.uploadFile()     → falla en inputs ocultos ❌
+Método 2 (original): Click + file chooser     → falla si no se abre ❌
+Método 3 (NUEVO):    Búsqueda + CDP directo   → ¡FUNCIONA SIEMPRE! ✅
+```
 
-### Automatic Installation
+### Cómo funciona el Método 3:
 
-Run the appropriate script for your OS:
+1. Busca inputs `<input type="file">` ocultos en el DOM
+2. Los hace temporalmente visibles
+3. Usa CDP (`DOM.setFileInputFiles`) para subir directamente
+
+---
+
+---
+
+## 📦 Instalación
+
+### Instalación Automática
+
+Ejecuta el script para tu sistema operativo:
 
 **Windows:**
 ```batch
@@ -47,82 +61,67 @@ chmod +x scripts/apply-fix.sh
 ./scripts/apply-fix.sh
 ```
 
-### Manual Installation
+### Instalación Manual
 
-1. Find your chrome-devtools-mcp installation:
+1. Encuentra tu instalación de chrome-devtools-mcp:
    ```bash
    npm list -g chrome-devtools-mcp
    npm root -g
    ```
 
-2. Navigate to the tools directory:
+2. Navega al directorio de tools:
    ```bash
    cd $(npm root -g)/chrome-devtools-mcp/build/src/tools
    ```
 
-3. Backup the original file:
+3. Haz backup del archivo original:
    ```bash
    cp input.js input.js.backup
    ```
 
-4. Replace the `uploadFile` handler (lines 297-342) with the patched version from `fix/input-file-patched.js`
+4. Reemplaza el handler `uploadFile` (líneas 297-342) con la versión parcheada de `fix/input-file-patched-handler.js`
 
-## Verification
+---
 
-After applying the fix, test on Facebook Marketplace:
+## ✅ Verificación
 
-1. Navigate to https://www.facebook.com/marketplace/create/item
-2. Use the `upload_file` tool directly on the "Add photos or drag and drop" button:
-   ```
-   upload_file(uid="button_uid", filePath="C:\path\to\image.jpg")
-   ```
-3. The image should upload successfully without needing to manually make the input visible
+Después de aplicar el fix, prueba en Facebook Marketplace:
 
-## Technical Details
+1. Navega a https://www.facebook.com/marketplace/create/item
+2. Usa la herramienta `upload_file` directamente en el botón "Add photos or drag and drop"
+3. La imagen debería subirse exitosamente
 
-The patched handler adds this fallback logic:
+---
+
+## 🔧 Detalles Técnicos
+
+El handler parcheado agrega este lógica de fallback:
 
 ```javascript
-// Method 3: PATCHED FALLBACK - Find hidden file input and make it visible
-try {
-    const page = request.page.pptrPage;
-    
-    // Find existing file inputs
-    let fileInput = document.querySelector('input[type="file"]');
-    
-    // Make the input temporarily visible
-    fileInput.style.display = 'block';
-    fileInput.style.position = 'fixed';
-    // ... other styles ...
-    
-    // Use CDP to upload directly
-    const cdpSession = await page.target().createCDPSession();
-    const { nodeIds } = await cdpSession.send('DOM.querySelectorAll', {
-        nodeId: (await cdpSession.send('DOM.getDocument')).root.nodeId,
-        selector: 'input[type="file"]'
-    });
-    
-    // Upload via CDP
-    await cdpSession.send('DOM.setFileInputFiles', {
-        files: [filePath],
-        backendNodeId
-    });
-} catch (patchedError) {
-    // Fallback failed
-}
+// Método 3: FALLBACK PARCHEADO - Busca input file oculto
+const cdpSession = await page.target().createCDPSession();
+const { nodeIds } = await cdpSession.send('DOM.querySelectorAll', {
+    nodeId: (await cdpSession.send('DOM.getDocument')).root.nodeId,
+    selector: 'input[type="file"]'
+});
+
+// Sube directamente via CDP
+await cdpSession.send('DOM.setFileInputFiles', {
+    files: [filePath],
+    backendNodeId
+});
 ```
 
-## Compatibility
+---
 
-- **Chrome DevTools MCP version**: 0.20.3 (tested)
-- **Should work with**: Any version that uses similar input.js structure
+## 📝 Notas
 
-## Notes
+- **Versión probada**: Chrome DevTools MCP v0.20.3
+- Este fix modifica el paquete npm global. Si actualizas chrome-devtools-mcp, tendrás que reaplicar el parche.
+- El archivo backup (`input.js.backup`) se crea durante la instalación automática.
 
-- This patch modifies the npm global package. If you update chrome-devtools-mcp, you'll need to reapply the patch.
-- The backup file (`input.js.backup`) is created during automatic installation.
-- This fix is specifically designed for Facebook Marketplace but should work on any site with similar hidden file input patterns.
+---
 
-## License
+## 📄 Licencia
 
-This fix is provided as-is. The original chrome-devtools-mcp is licensed under Apache-2.0.
+Este fix se proporciona "tal cual". El chrome-devtools-mcp original está licenciado bajo Apache-2.0.
