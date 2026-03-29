@@ -7,8 +7,8 @@
  * Original issue: upload_file fails on Facebook Marketplace and similar sites
  * that use hidden file inputs that don't trigger file chooser properly.
  * 
- * Fix: Adds a third fallback method that finds hidden <input type="file">
- * elements, makes them visible, and uploads via Chrome DevTools Protocol.
+ * Fix: Removes the unreliable file chooser method (opens system window)
+ * and uses Chrome DevTools Protocol directly for hidden file inputs.
  * 
  * Date: 2026-03-28
  * Author: Fix by opencode/mimo-v2-omni-free
@@ -25,11 +25,11 @@ const includeSnapshotSchema = zod
     .describe('Whether to include a snapshot in the response. Default is false.');
 
 // ============================================================================
-// PATCHED UPLOAD_FILE HANDLER - Added robust fallback for problematic sites
+// PATCHED UPLOAD_FILE HANDLER - No system window, uses CDP directly
 // ============================================================================
 export const uploadFile = definePageTool({
     name: 'upload_file',
-    description: 'Upload a file through a provided element. Includes automatic fallback for sites with hidden file inputs.',
+    description: 'Upload a file through a provided element. Uses CDP for hidden file inputs (no system dialog).',
     annotations: {
         category: ToolCategory.INPUT,
         readOnlyHint: false,
@@ -47,127 +47,81 @@ export const uploadFile = definePageTool({
         
         try {
             let uploaded = false;
+            const page = request.page.pptrPage;
             
-            // Method 1: Try direct upload (original method)
+            // Method 1: Try direct upload (works for visible file inputs)
             try {
                 await handle.uploadFile(filePath);
                 uploaded = true;
                 logger('File uploaded directly using uploadFile method');
             }
             catch (directError) {
-                logger('Direct upload failed, trying file chooser method', directError);
+                logger('Direct upload failed, using CDP method (no system window)', directError);
                 
-                // Method 2: Try clicking and waiting for file chooser (original fallback)
+                // Method 2: CDP FALLBACK - Upload directly without opening system dialog
+                // This works for hidden file inputs on Facebook Marketplace, etc.
                 try {
-                    const [fileChooser] = await Promise.all([
-                        request.page.pptrPage.waitForFileChooser({ timeout: 3000 }),
-                        handle.asLocator().click(),
-                    ]);
-                    await fileChooser.accept([filePath]);
-                    uploaded = true;
-                    logger('File uploaded using file chooser method');
-                }
-                catch (chooserError) {
-                    logger('File chooser method failed, trying PATCHED fallback', chooserError);
+                    const cdpSession = await page.target().createCDPSession();
                     
-                    // Method 3: PATCHED FALLBACK - Find hidden file input and make it visible
-                    try {
-                        const page = request.page.pptrPage;
+                    // Get the element's backend node ID
+                    const elementHandle = await page.evaluateHandle(
+                        (targetUid) => {
+                            // Try to find by UID attribute first
+                            const element = document.querySelector(`[uid="${targetUid}"]`) ||
+                                           document.querySelector(`[data-uid="${targetUid}"]`);
+                            if (element) return element;
+                            
+                            // Fallback: find any file input on the page
+                            return document.querySelector('input[type="file"]');
+                        },
+                        uid
+                    );
+                    
+                    if (elementHandle) {
+                        // Get the backend node ID using CDP
+                        const { node } = await cdpSession.send('DOM.describeNode', {
+                            objectId: elementHandle.remoteObject.objectId
+                        });
                         
-                        // Execute JavaScript to find or create a visible file input and upload
-                        const result = await page.evaluate(async (path) => {
-                            // Find existing file inputs
-                            let fileInput = document.querySelector('input[type="file"]');
-                            
-                            if (!fileInput) {
-                                // Create a new file input if none exists
-                                fileInput = document.createElement('input');
-                                fileInput.type = 'file';
-                                fileInput.style.display = 'none';
-                                document.body.appendChild(fileInput);
-                            }
-                            
-                            // Make the input temporarily visible and clickable
-                            const originalStyles = {
-                                display: fileInput.style.display,
-                                position: fileInput.style.position,
-                                visibility: fileInput.style.visibility,
-                                opacity: fileInput.style.opacity,
-                                width: fileInput.style.width,
-                                height: fileInput.style.height
-                            };
-                            
-                            fileInput.style.display = 'block';
-                            fileInput.style.position = 'fixed';
-                            fileInput.style.top = '50%';
-                            fileInput.style.left = '50%';
-                            fileInput.style.transform = 'translate(-50%, -50%)';
-                            fileInput.style.zIndex = '999999';
-                            fileInput.style.width = '200px';
-                            fileInput.style.height = '50px';
-                            fileInput.style.opacity = '1';
-                            fileInput.style.visibility = 'visible';
-                            fileInput.style.backgroundColor = 'white';
-                            fileInput.style.border = '2px solid #1877f2';
-                            fileInput.style.borderRadius = '8px';
-                            fileInput.style.padding = '10px';
-                            
-                            return { 
-                                success: true, 
-                                inputId: fileInput.id || 'patched-file-input',
-                                accept: fileInput.accept,
-                                multiple: fileInput.multiple
-                            };
-                        }, filePath);
-                        
-                        if (result.success) {
-                            // Now use the Puppeteer handle to upload the file
-                            // Find the visible file input by evaluating again
-                            const visibleInputHandle = await page.evaluateHandle(() => {
-                                const inputs = document.querySelectorAll('input[type="file"]');
-                                for (const input of inputs) {
-                                    if (input.style.display === 'block' && input.style.position === 'fixed') {
-                                        return input;
-                                    }
-                                }
-                                // Return first file input if none found as visible
-                                return inputs[0];
+                        if (node && node.backendNodeId) {
+                            // Upload file directly via CDP
+                            await cdpSession.send('DOM.setFileInputFiles', {
+                                files: [filePath],
+                                backendNodeId: node.backendNodeId
                             });
-                            
-                            if (visibleInputHandle) {
-                                // Use Puppeteer's uploadFile on the handle
-                                const cdpSession = await page.target().createCDPSession();
-                                const { nodeIds } = await cdpSession.send('DOM.querySelectorAll', {
-                                    nodeId: (await cdpSession.send('DOM.getDocument')).root.nodeId,
-                                    selector: 'input[type="file"]'
-                                });
-                                
-                                // Find the visible one
-                                for (const nodeId of nodeIds) {
-                                    const { model } = await cdpSession.send('DOM.getBoxModel', { nodeId });
-                                    if (model && model.content) {
-                                        // This input is visible (has dimensions)
-                                        const { backendNodeId } = await cdpSession.send('DOM.describeNode', { nodeId });
-                                        await cdpSession.send('DOM.setFileInputFiles', {
-                                            files: [filePath],
-                                            backendNodeId
-                                        });
-                                        uploaded = true;
-                                        logger('File uploaded using PATCHED fallback method');
-                                        break;
-                                    }
-                                }
-                            }
+                            uploaded = true;
+                            logger('File uploaded using CDP method (no system window)');
                         }
                     }
-                    catch (patchedError) {
-                        logger('Patched fallback method also failed', patchedError);
+                    
+                    // If still not uploaded, try finding any file input
+                    if (!uploaded) {
+                        const { nodeIds } = await cdpSession.send('DOM.querySelectorAll', {
+                            nodeId: (await cdpSession.send('DOM.getDocument')).root.nodeId,
+                            selector: 'input[type="file"]'
+                        });
+                        
+                        if (nodeIds && nodeIds.length > 0) {
+                            // Upload to the first file input found
+                            const { backendNodeId } = await cdpSession.send('DOM.describeNode', { 
+                                nodeId: nodeIds[0] 
+                            });
+                            await cdpSession.send('DOM.setFileInputFiles', {
+                                files: [filePath],
+                                backendNodeId
+                            });
+                            uploaded = true;
+                            logger('File uploaded using CDP fallback (found input[type=file])');
+                        }
                     }
+                }
+                catch (cdpError) {
+                    logger('CDP upload method failed', cdpError);
                 }
             }
             
             if (!uploaded) {
-                throw new Error(`Failed to upload file. All methods exhausted. The element could not accept the file directly, clicking did not trigger a file chooser, and the patched fallback also failed.`);
+                throw new Error(`Failed to upload file. Could not upload to element with uid "${uid}". The element may not accept file uploads.`);
             }
             
             if (request.params.includeSnapshot) {
