@@ -26,19 +26,24 @@
 
 ## ✅ La Solución
 
-Este fix agrega un **TERCER MÉTODO FALLBACK** que usa Chrome DevTools Protocol (CDP):
+Este fix **ELIMINA el file chooser del sistema** (que a veces no funciona) y usa Chrome DevTools Protocol directamente:
 
 ```
-Método 1 (original): handle.uploadFile()     → falla en inputs ocultos ❌
-Método 2 (original): Click + file chooser     → falla si no se abre ❌
-Método 3 (NUEVO):    Búsqueda + CDP directo   → ¡FUNCIONA SIEMPRE! ✅
+Método 1: handle.uploadFile()  → para inputs visibles ✅
+Método 2: CDP directo          → para inputs ocultos, SIN ventana del sistema ✅
 ```
 
-### Cómo funciona el Método 3:
+### ¿Por qué sin ventana del sistema?
 
-1. Busca inputs `<input type="file">` ocultos en el DOM
-2. Los hace temporalmente visibles
-3. Usa CDP (`DOM.setFileInputFiles`) para subir directamente
+- El file chooser nativo (ventana del sistema) **a veces no responde**
+- CDP sube el archivo **directamente al input**, sin pasar por el sistema
+- **Más rápido, más confiable, sin ventanas emergentes**
+
+### Cómo funciona:
+
+1. Intenta upload directo (funciona para inputs visibles)
+2. Si falla, usa CDP para subir directamente al input file oculto
+3. **NO abre ninguna ventana del sistema**
 
 ---
 
@@ -95,20 +100,21 @@ Después de aplicar el fix, prueba en Facebook Marketplace:
 
 ## 🔧 Detalles Técnicos
 
-El handler parcheado agrega este lógica de fallback:
+El handler parcheado usa CDP para subir directamente sin ventana del sistema:
 
 ```javascript
-// Método 3: FALLBACK PARCHEADO - Busca input file oculto
+// CDP Upload - Sin ventana del sistema
 const cdpSession = await page.target().createCDPSession();
-const { nodeIds } = await cdpSession.send('DOM.querySelectorAll', {
-    nodeId: (await cdpSession.send('DOM.getDocument')).root.nodeId,
-    selector: 'input[type="file"]'
+
+// Obtener el node del input file
+const { node } = await cdpSession.send('DOM.describeNode', {
+    objectId: elementHandle.remoteObject.objectId
 });
 
-// Sube directamente via CDP
+// Subir archivo directamente via CDP
 await cdpSession.send('DOM.setFileInputFiles', {
     files: [filePath],
-    backendNodeId
+    backendNodeId: node.backendNodeId
 });
 ```
 
