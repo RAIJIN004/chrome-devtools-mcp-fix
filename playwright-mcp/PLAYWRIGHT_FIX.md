@@ -30,7 +30,15 @@ browser_file_upload(["imagen.jpg"])
 
 ## Solución
 
-El parche modifica `files.js` para añadir un **fallback** cuando no hay file chooser disponible:
+El fix modifica **2 archivos**:
+
+### 1. `tool.js` - Permitir handler sin modal state
+
+El framework de herramientas (`defineTabTool`) bloqueaba cualquier herramienta con `clearsModalState` si el modal no existía. El fix cambia esto para que el handler se ejecute aunque no haya modal presente, delegando la decisión al handler.
+
+### 2. `files.js` - Fallback a setInputFiles
+
+Se añade un **fallback** cuando no hay file chooser disponible:
 
 1. **Método 1 (original)**: Si hay modal `fileChooser`, usa `fileChooser.setFiles()`
 2. **Método 2 (fallback)**: Si no hay modal, busca `input[type="file"]` en la página y usa `locator.setInputFiles()` directamente
@@ -47,17 +55,22 @@ scripts\apply-fix.bat
 
 ### Manual
 
-1. Localiza el archivo `files.js`:
+1. Localiza los archivos en el directorio tools:
    ```
-   $(npm root -g)/@playwright/mcp/node_modules/playwright/lib/mcp/browser/tools/files.js
+   $(npm root -g)/@playwright/mcp/node_modules/playwright/lib/mcp/browser/tools/
    ```
 
-2. Haz backup del original:
+2. Haz backup de los originales:
    ```bash
    copy files.js files.js.backup
+   copy tool.js tool.js.backup
    ```
 
-3. Reemplázalo con `fix/files-patched.js`
+3. Reemplázalos con los parcheados:
+   ```bash
+   copy fix/files-patched.js path/to/tools/files.js
+   copy fix/tool-patched.js path/to/tools/tool.js
+   ```
 
 4. Reinicia opencode (o tu cliente MCP)
 
@@ -70,6 +83,7 @@ scripts\revert-fix.bat
 O manualmente:
 ```bash
 copy files.js.backup files.js
+copy tool.js.backup tool.js
 ```
 
 ## Verificación
@@ -106,7 +120,8 @@ await firstInput.setInputFiles(params.paths);
 
 | Archivo | Descripción |
 |---------|-------------|
-| `playwright/lib/mcp/browser/tools/files.js` | Handler de `browser_file_upload` con handle parcheado |
+| `playwright/lib/mcp/browser/tools/tool.js` | `defineTabTool` - Permite handler ejecutarse sin modal |
+| `playwright/lib/mcp/browser/tools/files.js` | `browser_file_upload` - Fallback a `setInputFiles` |
 
 ## Notas
 

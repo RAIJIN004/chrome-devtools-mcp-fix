@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM Revert @playwright/mcp - Restore original files.js from backup
+REM Revert @playwright/mcp - Restore original files.js and tool.js from backup
 REM ============================================================================
 
 setlocal enabledelayedexpansion
@@ -13,26 +13,32 @@ echo.
 
 for /f "tokens=*" %%i in ('npm root -g') do set NPM_GLOBAL=%%i
 
-set FILES_JS=%NPM_GLOBAL%\@playwright\mcp\node_modules\playwright\lib\mcp\browser\tools\files.js
-set BACKUP_JS=%NPM_GLOBAL%\@playwright\mcp\node_modules\playwright\lib\mcp\browser\tools\files.js.backup
+set TOOLS_DIR=%NPM_GLOBAL%\@playwright\mcp\node_modules\playwright\lib\mcp\browser\tools
+set FILES_JS=%TOOLS_DIR%\files.js
+set TOOL_JS=%TOOLS_DIR%\tool.js
+set BACKUP_FILES_JS=%TOOLS_DIR%\files.js.backup
+set BACKUP_TOOL_JS=%TOOLS_DIR%\tool.js.backup
 
-if not exist "%BACKUP_JS%" (
-    echo No backup found at %BACKUP_JS%
-    echo Nothing to revert.
-    pause
-    exit /b 1
+echo [1/2] Restoring tool.js...
+if not exist "%BACKUP_TOOL_JS%" (
+    echo   No backup found for tool.js. Skipping.
+) else (
+    copy /Y "%BACKUP_TOOL_JS%" "%TOOL_JS%"
+    echo   Done.
 )
 
-echo Restoring original files.js from backup...
-copy /Y "%BACKUP_JS%" "%FILES_JS%"
-if errorlevel 1 (
-    echo ERROR: Could not restore backup. Try running as Administrator.
-    pause
-    exit /b 1
+echo [2/2] Restoring files.js...
+if not exist "%BACKUP_FILES_JS%" (
+    echo   No backup found for files.js. Skipping.
+) else (
+    copy /Y "%BACKUP_FILES_JS%" "%FILES_JS%"
+    echo   Done.
 )
 
 echo.
-echo Original files.js restored successfully!
-echo Backup kept at: %BACKUP_JS%
+echo Revert completed!
+echo Backups preserved at:
+echo   %BACKUP_TOOL_JS%
+echo   %BACKUP_FILES_JS%
 echo.
 pause
